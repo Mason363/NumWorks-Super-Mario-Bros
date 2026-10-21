@@ -1,4 +1,4 @@
-> **Super Mario Bros. for the NumWorks calculator**, part of [NumPlay](https://github.com/Mason363/NumPlay), the collection of free NumWorks games. It comes as its own app: get `SuperMarioBros.nwa` from the [latest release](https://github.com/Mason363/NumWorks-Super-Mario-Bros/releases/latest).
+> **Super Mario Bros. for the NumWorks calculator**, part of [NumPlay](https://github.com/Mason363/NumPlay): real games rebuilt for the NumWorks. It comes as its own app: get `SuperMarioBros.nwa` from the [latest release](https://github.com/Mason363/NumWorks-Super-Mario-Bros/releases/latest).
 
 <p align="center">
   <img src="src/icon.png" width="84" alt="Super Mario Bros. icon">
