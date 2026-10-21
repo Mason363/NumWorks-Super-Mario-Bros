@@ -1,0 +1,61 @@
+name: Build
+
+# Builds SuperMarioBros.nwa and plays the game on a computer (make test). Pushing a tag like v1.0.0 publishes
+# a release with the .nwa.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ARM toolchain
+        run: |
+          v=15.2.1-1.1
+          curl -sSL "https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/v$v/xpack-arm-none-eabi-gcc-$v-linux-x64.tar.gz" | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xpack-arm-none-eabi-gcc-$v/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Tools
+        run: |
+          pip install pillow
+          npm install -g nwlink@1.0.0
+
+      - name: Build
+        run: |
+          make -j4 NWLINK=nwlink
+          make check NWLINK=nwlink
+
+      - name: Test
+        run: make test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SuperMarioBros
+          path: output/SuperMarioBros.nwa
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "output/SuperMarioBros.nwa#SuperMarioBros.nwa: Super Mario Bros. for the NumWorks calculator" \
+            --title "Super Mario Bros. $GITHUB_REF_NAME" \
+            --notes "Super Mario Bros. for the NumWorks calculator (N0110, N0115, N0120). Install SuperMarioBros.nwa from my.numworks.com/apps: see the README."

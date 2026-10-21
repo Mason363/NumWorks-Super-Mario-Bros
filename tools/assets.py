@@ -100,7 +100,9 @@ def main():
     icon.alpha_composite(mario,(9,4));buf=io.BytesIO();icon.convert('RGB').save(buf,format='PNG',optimize=True)
     outputs.update({ROOT/'src/data.c':('\n'.join(lines)+'\n').encode(),ROOT/'src/icon.png':buf.getvalue()})
     for path,data in outputs.items():
-        if args.check:assert path.read_bytes()==data,'Regenerate '+str(path)
-        else:path.write_bytes(data)
+        if not args.check:path.write_bytes(data)
+        elif path.suffix=='.png':  # (the pixels: PNG encoders differ between Pillow versions)
+            assert Image.open(path).convert('RGB').tobytes()==icon.convert('RGB').tobytes(),'Regenerate '+str(path)
+        else:assert path.read_bytes()==data,'Regenerate '+str(path)
     print('PASS: original data hashes and deterministic generated assets'+(' (check)' if args.check else ''))
 if __name__=='__main__':main()

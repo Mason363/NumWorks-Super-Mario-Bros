@@ -1,58 +1,73 @@
-# Full Super Mario Bros. NumWorks port. Native game engine, no CPU emulator.
-CC = arm-none-eabi-gcc
+# Super Mario Bros. on the NumWorks calculator: Nintendo's game run natively by the SMB-Vanilla engine
+# (vendor/smbcore, GPL-3.0), with the calculator's screen, keys and saves (src/).
+#   make          output/SuperMarioBros.nwa
+#   make check    link it like the calculator does, with the 133652 bytes of RAM custom builds of Epsilon give apps
+#   make test     the game on a computer: every level, saves, the reference run and the fidelity fingerprint
+#   make assets   src/data.c, src/rom.h and src/icon.png again from assets/ (Python + Pillow)
+Q ?= @
+# the ARM toolchain on the PATH, or in TOOLCHAIN=<its bin folder>
+TOOLCHAIN ?=
+BIN = $(if $(TOOLCHAIN),$(TOOLCHAIN)/)
+CC = $(BIN)arm-none-eabi-gcc
+STRIP = $(BIN)arm-none-eabi-strip --strip-unneeded
+SIZE = $(BIN)arm-none-eabi-size
 NWLINK ?= npx --yes -- nwlink@1.0.0
 PYTHON ?= python3
 HOST_CC ?= cc
-ARM_LD ?= arm-none-eabi-ld
-OBJCOPY = arm-none-eabi-objcopy
+OUT = output
+APP = $(OUT)/SuperMarioBros.nwa
+RAM = 133652
+
 SRC = src/main.c src/game.c src/render.c src/data.c
 CORE = vendor/smbcore/common.c vendor/smbcore/common_sound.c vendor/smbcore/area.c vendor/smbcore/smb1only.c
-OBJECTS = $(patsubst %.c,output/%.o,$(SRC) $(CORE))
-HEADERS = $(wildcard src/*.h vendor/smbcore/*.h) ../common/epsilon_app.h ../common/epsilon_files.h
-PACKER = tools/compact_nwa.py tools/standalone.ld
-CFLAGS = -std=c11 $(shell $(NWLINK) eadk-cflags-device) -Os -Wall -Wextra -Werror
-CFLAGS += -Wno-unused-parameter -Wno-unused-variable -DSMB1_MODE -DNDEBUG -fwrapv -fsigned-char -fno-strict-aliasing
-CFLAGS += -ffunction-sections -fdata-sections -fstack-usage -fno-tree-loop-distribute-patterns -flto -fno-fat-lto-objects -fvisibility=internal
-LINK = -nostartfiles --specs=nano.specs -Wl,--relocatable,--gc-sections,-e,main -flinker-output=nolto-rel
-.PHONY: build module check test replay fidelity assets check-assets clean
-build: output/supermariobros.nwa
-output/%.o: %.c $(HEADERS)
-	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-output/icon.o: src/icon.png
-	mkdir -p output
-	$(NWLINK) png-icon-o $< $@
-output/icon-compact.o: output/icon.o $(PACKER)
-	$(PYTHON) tools/compact_nwa.py icon $< $@ --objcopy $(OBJCOPY)
-output/supermariobros-debug.nwa: $(OBJECTS) output/icon-compact.o $(PACKER)
-	$(CC) $(CFLAGS) $(LINK) -Wl,-u,eadk_app_name,-u,eadk_app_icon,-u,eadk_api_level $(OBJECTS) output/icon-compact.o -lm -o output/standalone.o
-	$(PYTHON) tools/compact_nwa.py app output/standalone.o $@ --ld $(ARM_LD)
-output/supermariobros.nwa: output/supermariobros-debug.nwa $(PACKER)
-	$(PYTHON) tools/compact_nwa.py release $< $@ --objcopy $(OBJCOPY)
-module: $(OBJECTS)
-	$(CC) $(CFLAGS) $(LINK) $^ -lm -o output/module.o
-check: build
-	$(NWLINK) nwa-bin output/supermariobros.nwa output/release.bin --ram-length 107674
-	$(NWLINK) nwa-bin output/supermariobros-debug.nwa output/debug.bin --ram-length 107674
-	$(PYTHON) -c "from pathlib import Path; assert Path('output/release.bin').read_bytes() == Path('output/debug.bin').read_bytes()"
+OBJ = $(patsubst %.c,$(OUT)/obj/%.o,$(SRC) $(CORE))
+HEADERS = $(wildcard src/*.h vendor/smbcore/*.h common/*.h)
+
+# The engine needs these on every compiler: ARM's char is unsigned by default, which would change the
+# original loop-command parser.
+GAME_FLAGS = -std=c11 -DSMB1_MODE -fwrapv -fsigned-char -fno-strict-aliasing
+CFLAGS = $(GAME_FLAGS) $(shell $(NWLINK) eadk-cflags-device) -Os -DNDEBUG -Wall -Wextra -Werror
+CFLAGS += -Wno-unused-parameter -Wno-unused-variable -ffunction-sections -fdata-sections
+CFLAGS += -fno-tree-loop-distribute-patterns -flto -fno-fat-lto-objects -fvisibility=internal
+LDFLAGS = -Wl,--relocatable -nostartfiles --specs=nano.specs -flinker-output=nolto-rel
+LDFLAGS += -Wl,-e,main -Wl,-u,eadk_app_name -Wl,-u,eadk_app_icon -Wl,-u,eadk_api_level -Wl,--gc-sections
+
+.PHONY: build check test assets clean
+build: $(APP)
+
+$(OUT)/obj/%.o: %.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(Q) $(CC) $(CFLAGS) -c $< -o $@
+
+$(OUT)/icon.o: src/icon.png
+	@mkdir -p $(@D)
+	$(Q) $(NWLINK) png-icon-o $< $@
+
+$(APP): $(OBJ) $(OUT)/icon.o
+	@echo "LD      $@"
+	$(Q) $(CC) $(CFLAGS) $(LDFLAGS) $^ -lm -o $@
+	$(Q) $(STRIP) $@
+	$(Q) $(SIZE) $@
+
+check: $(APP)
+	$(Q) $(NWLINK) nwa-bin --ram-length $(RAM) $< $(OUT)/SuperMarioBros.bin
+	@echo "BIN     $(OUT)/SuperMarioBros.bin: $$(wc -c < $(OUT)/SuperMarioBros.bin | tr -d " ") bytes, fits $(RAM) bytes of RAM"
+
+HOST = $(HOST_CC) $(GAME_FLAGS) -O2
 test:
-	mkdir -p output
-	$(PYTHON) tests/test_packing.py
-	$(HOST_CC) -std=c11 -O2 -DSMB1_MODE -fwrapv -fsigned-char -fno-strict-aliasing tests/test.c src/game.c src/render.c src/data.c $(CORE) -o output/test
-	cd output && ./test
-	$(HOST_CC) -std=c11 -O2 -DSMB1_MODE -fwrapv -fsigned-char -fno-strict-aliasing tests/rom.c src/game.c src/data.c $(CORE) -o output/rom
-	./output/rom assets/tables.bin tests/legacy-save.bin
-fidelity:
-	mkdir -p output
-	$(HOST_CC) -std=c11 -O2 -DSMB1_MODE -fwrapv -fsigned-char -fno-strict-aliasing tests/fidelity.c src/game.c src/render.c src/data.c $(CORE) -o output/fidelity
-	cd output && ./fidelity ../tests/reference.rec ../tests/fidelity.expected
-replay:
-	mkdir -p output
-	$(HOST_CC) -std=c11 -O2 -DSMB1_MODE -fwrapv -fsigned-char -fno-strict-aliasing tests/replay.c src/game.c src/data.c $(CORE) -o output/replay
-	./output/replay tests/reference.rec
+	@mkdir -p $(OUT)
+	$(Q) $(HOST) tests/test.c src/game.c src/render.c src/data.c $(CORE) -o $(OUT)/test
+	$(Q) cd $(OUT) && ./test
+	$(Q) $(HOST) tests/rom.c src/game.c src/data.c $(CORE) -o $(OUT)/rom
+	$(Q) $(OUT)/rom assets/tables.bin tests/legacy-save.bin
+	$(Q) $(HOST) tests/replay.c src/game.c src/data.c $(CORE) -o $(OUT)/replay
+	$(Q) $(OUT)/replay tests/reference.rec
+	$(Q) $(HOST) tests/fidelity.c src/game.c src/render.c src/data.c $(CORE) -o $(OUT)/fidelity
+	$(Q) cd $(OUT) && ./fidelity ../tests/reference.rec ../tests/fidelity.expected
+	$(Q) $(PYTHON) tools/assets.py --check
+
 assets:
 	$(PYTHON) tools/assets.py
-check-assets:
-	$(PYTHON) tools/assets.py --check
+
 clean:
-	rm -rf output
+	rm -rf $(OUT)
