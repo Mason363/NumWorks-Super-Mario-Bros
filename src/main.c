@@ -37,13 +37,20 @@ static unsigned buttons(uint64_t k) {
   if(k&KEY(eadk_key_alpha))b|=SM_SELECT;
   return b;
 }
+/* the saved game, or false (the game unchanged) */
+static bool load(void) {
+  uint32_t length=0;const uint8_t *p=ef_read("supermario.sav",&length);
+  return sm_decode(&game,p,length);
+}
 int main(void) {
   np_app_begin();
-  uint32_t length=0;const uint8_t *p=ef_read("supermario.sav",&length);
-  bool loaded=sm_decode(&game,p,length);
-  if(!loaded)sm_init(&game);
-  /* A saved adventure opens frozen, so loading cannot cause an accidental death. */
-  unsigned view=loaded?SM_VIEW_PAUSE:SM_VIEW_GAME,selected=0,return_view=SM_VIEW_PAUSE;
+  bool loaded=load();
+  if(!loaded) { /* (the title drawn behind the keys) */
+    sm_init(&game);
+    for(unsigned i=0;i<90;++i)sm_step(&game,0);
+  }
+  /* A saved game opens paused, so loading cannot cause an accidental death. The first game opens on the keys. */
+  unsigned view=loaded?SM_VIEW_PAUSE:SM_VIEW_GUIDE,selected=0,return_view=SM_VIEW_GAME;
   unsigned error_return=view,error_selection=0;
   uint64_t previous=0,stale=eadk_keyboard_scan();
   uint32_t now=(uint32_t)eadk_timing_millis(),last=now,draw_at=now,save_at=now,accum=0;
@@ -78,20 +85,27 @@ int main(void) {
         if(next)selected=(selected+1)%4;
         if(prev)selected=(selected+3)%4;
         if(back||(ok&&selected==0))view=SM_VIEW_GAME,stale=keys;
-        else if(ok&&selected==1)view=SM_VIEW_RESTART,selected=0;
+        else if(ok&&selected==1)view=SM_VIEW_RESTART;
         else if(ok&&selected==2)view=SM_VIEW_GUIDE,return_view=SM_VIEW_PAUSE;
-        else if(ok&&selected==3) {
-          if(save())break;
-          error_return=SM_VIEW_PAUSE;error_selection=3;view=SM_VIEW_SAVE_ERROR;stale=keys;
-        }
+        else if(ok&&selected==3)view=SM_VIEW_QUIT;
       } else if(view==SM_VIEW_GUIDE) {
         if(ok||back)view=return_view,stale=keys;
       } else if(view==SM_VIEW_RESTART) {
-        if(next||prev)selected^=1;
-        if(back||(ok&&!selected))view=SM_VIEW_PAUSE,selected=1;
+        if(back)view=SM_VIEW_PAUSE;
         else if(ok){sm_init(&game);view=SM_VIEW_GAME;stale=keys;save_at=now;}
+      } else if(view==SM_VIEW_QUIT) {
+        if(back)view=SM_VIEW_PAUSE;
+        else if(ok) {
+          if(save())break;
+          error_return=SM_VIEW_PAUSE;error_selection=3;view=SM_VIEW_SAVE_ERROR;stale=keys;
+        }
       } else if(view==SM_VIEW_FAULT) {
-        if(ok){sm_init(&game);view=SM_VIEW_GAME;stale=keys;}
+        /* back to the last save (paused), or to the title */
+        if(ok||back) {
+          bool back_to_save=load();
+          if(!back_to_save)sm_init(&game);
+          view=back_to_save?SM_VIEW_PAUSE:SM_VIEW_GAME;selected=0;stale=keys;save_at=now;
+        }
       } else if(view==SM_VIEW_SAVE_ERROR) {
         if(back)break;
         if(ok&&save())break;

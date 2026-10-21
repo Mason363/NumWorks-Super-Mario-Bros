@@ -97,7 +97,7 @@ int main(void) {
     save[i]^=1;assert(!sm_decode(&copy,save,sizeof save));save[i]^=1;
   }
   puts("PASS: every save-byte corruption rejected");
-  for(unsigned v=0;v<=SM_VIEW_FAULT;++v) {
+  for(unsigned v=0;v<SM_VIEWS;++v) {
     sm_invalidate();sm_render(&game,v,0,false,push);
     unsigned before=game.ticks;sm_render(&game,v,1,false,push);assert(game.ticks==before);
   }

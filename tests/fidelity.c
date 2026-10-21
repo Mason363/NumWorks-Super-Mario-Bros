@@ -1,6 +1,6 @@
-/* Regression fingerprint captured from the full, unoptimized port.
- * Hash every serialized tick and every RGB565 test image, including restored
- * states, 32 stages, power-ups, ending, menus and the reference input replay.
+/* Regression fingerprint of the engine and its picture.
+ * Hash every serialized tick and the game picture of every test image, including restored
+ * states, 32 stages, power-ups, ending and the reference input replay.
  * No native pointers or compiler-dependent structure padding enter the hash. */
 #include "../src/game.h"
 #include <stdio.h>
@@ -25,11 +25,17 @@ static bool traced_step(sm_game *g,uint8_t keys) {
   bool ok=sm_step(g,keys);uint8_t encoded[SM_SAVE_BYTES];
   sm_encode(g,encoded);hash(encoded,sizeof encoded);++ticks;return ok;
 }
+/* The picture the engine draws: the NES screen's 256 columns and its rows 8 to 231 (as a television showed them),
+ * from the game view only, so the menus and the key line can change without changing it. */
+#ifndef PICTURE_Y
+#define PICTURE_Y 0
+#endif
 static void traced_render(const sm_game *g,unsigned v,unsigned s,bool f,sm_push p) {
   sm_render(g,v,s,f,p);
+  if(v!=SM_VIEW_GAME)return;
   /* Normalize pixel byte order for a portable reference. */
-  for(unsigned i=0;i<320*240;++i) {
-    uint8_t b[2]={(uint8_t)screen[i],(uint8_t)(screen[i]>>8)};hash(b,2);
+  for(unsigned y=PICTURE_Y;y<PICTURE_Y+224;++y)for(unsigned x=32;x<288;++x) {
+    uint16_t c=screen[y*320+x];uint8_t b[2]={(uint8_t)c,(uint8_t)(c>>8)};hash(b,2);
   }
   ++images;
 }

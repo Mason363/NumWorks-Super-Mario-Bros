@@ -7,40 +7,54 @@
 #define NAVY RGB(13,19,31)
 #define GOLD RGB(247,186,63)
 #define GREY RGB(180,192,207)
+#define FOCUS RGB(54,68,91)
+/* The NES picture's rows 8 to 231, as a television showed them, fill the screen's first 224 rows between two
+ * borders; the 16 rows under it hold the key line. Everything is drawn in NES coordinates, 8 rows at a time:
+ * a strip covers rows top to top+7 and columns clip_l to clip_r-1 (the picture's 256, or the whole width). */
+#define PICTURE_TOP 8
+#define PICTURE_BOTTOM 232
 static uint16_t strip[320*8],palette[32];
-static int top;
+static int top,clip_l=32,clip_r=288;
 static bool invalid=true;
 void sm_invalidate(void) {invalid=true;}
 static void pixel(int x,int y,uint16_t c) {
-  if(x>=0&&x<320&&y>=top&&y<top+8)strip[(y-top)*320+x]=c;
+  if(x>=clip_l&&x<clip_r&&y>=top&&y<top+8)strip[(y-top)*(clip_r-clip_l)+x-clip_l]=c;
 }
 static void rect(int x,int y,int w,int h,uint16_t c) {
-  int l=x<0?0:x,r=x+w>320?320:x+w,t=y<top?top:y,b=y+h>top+8?top+8:y+h;
-  for(int yy=t;yy<b;++yy)for(int xx=l;xx<r;++xx)strip[(yy-top)*320+xx]=c;
+  int l=x<clip_l?clip_l:x,r=x+w>clip_r?clip_r:x+w,t=y<top?top:y,b=y+h>top+8?top+8:y+h;
+  for(int yy=t;yy<b;++yy)for(int xx=l;xx<r;++xx)strip[(yy-top)*(clip_r-clip_l)+xx-clip_l]=c;
 }
-static void tile(unsigned idx,int x,int y,unsigned pal,bool flipx,bool flipy,uint16_t override) {
-  if(y>=top+8||y+8<=top||x>=288||x+8<=32)return;
+static void frame(int x,int y,int w,int h,int t,uint16_t c) {
+  rect(x,y,w,t,c);rect(x,y+h-t,w,t,c);rect(x,y,t,h,c);rect(x+w-t,y,t,h,c);
+}
+/* One 8x8 pattern: colours 1 to 3 from the palette, or all from `override`, or from `fixed`. */
+static void pattern(unsigned idx,int x,int y,unsigned pal,bool flipx,bool flipy,uint16_t override,
+                      const uint16_t *fixed) {
+  if(y>=top+8||y+8<=top||x>=clip_r||x+8<=clip_l)return;
   const uint8_t *p=smb_patterns+(idx&511)*16;
   int start=top>y?top-y:0,end=top+8-y;if(end>8)end=8;
   for(int yy=start;yy<end;++yy) {
     int row=flipy?7-yy:yy;unsigned lo=p[row],hi=p[row+8];
     for(int xx=0;xx<8;++xx) {
       unsigned bit=flipx?xx:7-xx,v=((lo>>bit)&1)|(((hi>>bit)&1)<<1);
-      if(v&&x+xx>=32&&x+xx<288)pixel(x+xx,y+yy,override?override:palette[(pal&7)*4+v]);
+      if(v)pixel(x+xx,y+yy,fixed?fixed[v]:override?override:palette[(pal&7)*4+v]);
     }
   }
 }
-static void text(int x,int y,const char *s,uint16_t c) {
-  for(;*s;++s,x+=8) {
-    unsigned ch=(unsigned char)*s;
-    if(ch>='a'&&ch<='z')ch-=32;
-    unsigned idx=ch>='0'&&ch<='9'?ch-'0':ch>='A'&&ch<='Z'?ch-'A'+10:36;
-    if(ch=='-')idx=40;
-    if(ch=='!')idx=43;
-    if(ch=='.')idx=175;
-    tile(256+idx,x,y,0,false,false,c);
-  }
+static void tile(unsigned idx,int x,int y,unsigned pal,bool flipx,bool flipy,uint16_t override) {
+  pattern(idx,x,y,pal,flipx,flipy,override,0);
 }
+/* The game's own letters: digits, A to Z, - ! and . (others are blanks) */
+static void glyph(int x,int y,char c,uint16_t color) {
+  unsigned ch=(unsigned char)c;
+  if(ch>='a'&&ch<='z')ch-=32;
+  unsigned idx=ch>='0'&&ch<='9'?ch-'0':ch>='A'&&ch<='Z'?ch-'A'+10:36;
+  if(ch=='-')idx=40;
+  if(ch=='!')idx=43;
+  if(ch=='.')idx=175;
+  tile(256+idx,x,y,0,false,false,color);
+}
+static void text(int x,int y,const char *s,uint16_t c) {for(;*s;++s,x+=8)glyph(x,y,*s,c);}
 static void centered(int y,const char *s,uint16_t c) {text(160-(int)strlen(s)*4,y,s,c);}
 static void sprites(const sm_game *g,bool behind) {
   for(int i=63;i>=0;--i) {
@@ -63,38 +77,57 @@ static void background(const sm_game *g) {
     }
   }
 }
+/* the title screen's mushroom points at the chosen line */
+static const uint16_t mushroom[4]={0,RGB(0xfe,0xcc,0xc5),RGB(0x99,0x4e,0x00),RGB(0,0,0)};
 static void choice(int y,const char *label,unsigned id,unsigned selected) {
-  if(id==selected)rect(54,y-4,212,16,RGB(54,68,91)),text(60,y,">",GOLD);
-  text(76,y,label,id==selected?WHITE:GREY);
+  bool on=id==selected;
+  if(on)rect(76,y-5,168,18,FOCUS),frame(76,y-5,168,18,1,GOLD),pattern(256+0xce,88,y,0,false,false,0,mushroom);
+  text(108,y,label,on?WHITE:GREY);
 }
+static void panel(int x,int y,int w,int h) {rect(x,y,w,h,NAVY);rect(x,y,w,3,GOLD);}
 static void overlay(unsigned view,unsigned selected,bool failed) {
-  rect(47,50,226,149,NAVY);rect(47,50,226,3,GOLD);
   if(view==SM_VIEW_PAUSE) {
-    centered(64,"PAUSED",WHITE);
-    choice(90,"RESUME",0,selected);choice(112,"NEW GAME",1,selected);
-    choice(134,"CONTROLS",2,selected);choice(156,"SAVE AND EXIT",3,selected);
-    centered(182,failed?"SAVE FAILED":"BY BOBYDELUXE",failed?GOLD:GREY);
+    panel(64,52,192,140);centered(66,"PAUSED",WHITE);
+    choice(92,"RESUME",0,selected);choice(114,"NEW GAME",1,selected);
+    choice(136,"CONTROLS",2,selected);choice(158,"QUIT",3,selected);
+    if(failed)centered(178,"SAVE FAILED",GOLD);
   } else if(view==SM_VIEW_GUIDE) {
-    centered(64,"CONTROLS",WHITE);
-    text(58,86,"ARROWS     MOVE / DUCK",GREY);
-    text(58,104,"OK / 5     JUMP / SWIM",WHITE);
-    text(58,122,"SHIFT      RUN / FIRE",WHITE);
-    text(58,140,"EXE        START",GREY);
-    text(58,158,"ALPHA      1 / 2 PLAYERS",GREY);
-    centered(182,"OK / BACK  RETURN",GOLD);
-  } else if(view==SM_VIEW_RESTART) {
-    centered(64,"NEW GAME",WHITE);
-    centered(94,"REPLACE THIS ADVENTURE",GREY);
-    centered(111,"AND START FROM WORLD 1",GREY);
-    choice(143,"KEEP PLAYING",0,selected);choice(171,"START NEW",1,selected);
-  } else if(view==SM_VIEW_FAULT) {
-    centered(69,"GAME INTERRUPTED",GOLD);centered(102,"PROGRESS IS RETAINED",GREY);
-    centered(136,"OK  RETURN TO TITLE",WHITE);centered(177,"HOME  EXIT",GREY);
+    static const char *const keys[][2]={{"ARROWS","MOVE AND DUCK"},{"OK","JUMP AND SWIM"},{"SHIFT","RUN AND FIRE"},
+      {"EXE","START AND PAUSE"},{"ALPHA","1 OR 2 PLAYERS"},{"BACK","MENU"},{"HOME","SAVE AND QUIT"}};
+    panel(47,46,226,148);centered(60,"CONTROLS",WHITE);
+    for(int i=0;i<7;++i)text(60,82+i*15,keys[i][0],WHITE),text(124,82+i*15,keys[i][1],GREY);
+  } else if(view==SM_VIEW_RESTART||view==SM_VIEW_QUIT||view==SM_VIEW_FAULT) {
+    static const char *const lines[][2]={{"NEW GAME","THIS GAME WILL BE LOST"},{"QUIT","YOUR GAME IS SAVED"},
+      {"GAME INTERRUPTED","YOUR LAST SAVE IS KEPT"}};
+    unsigned i=view==SM_VIEW_RESTART?0:view==SM_VIEW_QUIT?1:2;
+    panel(56,90,208,60);centered(104,lines[i][0],i==2?GOLD:WHITE);centered(126,lines[i][1],GREY);
   } else {
-    centered(65,"SAVE FAILED",GOLD);centered(94,"FREE STORAGE MAY BE FULL",GREY);
-    centered(119,"OK  RETRY SAVE AND EXIT",WHITE);
-    centered(143,"1   RETURN TO THE GAME",GREY);
-    centered(171,"BACK  EXIT WITHOUT SAVE",GOLD);
+    panel(47,82,226,76);centered(96,"SAVE FAILED",GOLD);
+    centered(118,"THE STORAGE MAY BE FULL",GREY);centered(136,"BACK QUITS WITHOUT SAVING",GREY);
+  }
+}
+/* The keys that matter now: groups three spaces apart, each a key (white) and what it does. */
+static const char *keyline(const sm_game *g,unsigned view) {
+  const uint8_t *ram=g->state.rammem;
+  switch(view) {
+  case SM_VIEW_GAME:
+    if(ram[0x770]==0)return ram[0x7fc]?"EXE START   SHIFT WORLD   ALPHA PLAYERS":"EXE START   ALPHA 1 OR 2 PLAYERS";
+    if(ram[0x770]==2&&ram[0x75f]==7)return "SHIFT BUTTON B";
+    if(ram[0x776]&1)return "EXE RESUME   BACK MENU";
+    return "OK JUMP   SHIFT RUN   BACK MENU";
+  case SM_VIEW_PAUSE:return "OK SELECT   BACK RESUME";
+  case SM_VIEW_GUIDE:return "OK CONTINUE";
+  case SM_VIEW_RESTART:return "OK START OVER   BACK CANCEL";
+  case SM_VIEW_QUIT:return "OK QUIT   BACK CANCEL";
+  case SM_VIEW_FAULT:return "OK CONTINUE   HOME QUIT";
+  default:return "OK TRY AGAIN   1 RESUME   BACK QUIT";
+  }
+}
+static void draw_keys(const char *s,int y) {
+  int x=160-(int)strlen(s)*4;bool key=true;
+  for(const char *p=s;*p;++p,x+=8) {
+    if(*p==' ') {if(p[1]==' ')key=true;else if(p[-1]!=' ')key=false;continue;}
+    glyph(x,y,*p,key?WHITE:GREY);
   }
 }
 static unsigned old_view=99,old_selected;
@@ -106,15 +139,27 @@ void sm_render(const sm_game *g,unsigned view,unsigned selected,bool failed,sm_p
     unsigned c=g->state.ppuram[0x800+i]&63;
     palette[i]=(uint16_t)RGB(PALETTE_BUILTIN[c][0],PALETTE_BUILTIN[c][1],PALETTE_BUILTIN[c][2]);
   }
-  for(top=0;top<240;top+=8) {
-    rect(0,top,320,8,NAVY);rect(32,top,256,8,palette[16]);
+  if(invalid) { /* the borders beside the picture */
+    for(unsigned i=0;i<32*8;++i)strip[i]=NAVY;
+    for(int y=0;y<PICTURE_BOTTOM-PICTURE_TOP;y+=8)push(0,y,32,8,strip),push(288,y,32,8,strip);
+  }
+  clip_l=32;clip_r=288;
+  for(top=PICTURE_TOP;top<PICTURE_BOTTOM;top+=8) {
+    rect(32,top,256,8,palette[16]);
     if(g->state.ppu.screen_on) {sprites(g,true);background(g);sprites(g,false);}
     /* A small adaptation credit outside the original scene on the title. */
     if(g->state.rammem[0x770]==0&&g->state.rammem[0x772]>=3) {
       rect(104,196,112,11,palette[16]);centered(197,"BY BOBYDELUXE",WHITE);
     }
     if(view!=SM_VIEW_GAME)overlay(view,selected,failed);
-    push(0,top,320,8,strip);
+    push(32,top-PICTURE_TOP,256,8,strip);
   }
+  clip_l=0;clip_r=320;
+  const char *keys=keyline(g,view);
+  for(top=PICTURE_BOTTOM;top<PICTURE_BOTTOM+16;top+=8) {
+    rect(0,top,320,8,NAVY);draw_keys(keys,PICTURE_BOTTOM+4);
+    push(0,top-PICTURE_TOP,320,8,strip);
+  }
+  clip_l=32;clip_r=288;
   old_view=view;old_selected=selected;old_failed=failed;old_ticks=g->ticks;invalid=false;
 }
